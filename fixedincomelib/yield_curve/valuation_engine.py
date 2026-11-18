@@ -201,13 +201,13 @@ class ValuationEngineProductRfrSwap(ValuationEngineProduct):
         self.cash_ = (
             self.fixed_leg_sign_ * self.fixed_cash_ + self.floating_leg_sign_ * self.float_cash_
         )
-        # TODO 2a: Set self.annuity_ to the fixed-leg annuity per unit notional.
-        # Use the nonzero fixed coupon and the fixed-leg PV already calculated.
-        raise NotImplementedError("TODO 2a: calculate the fixed-leg annuity")
+        # TODO 2a: fixed-leg PV = notional * fixed_rate * annuity
+        #   => annuity per unit notional = fixed_value_ / (notional * fixed_rate).
+        self.annuity_ = self.fixed_value_ / (self.notional_ * self.fixed_rate_)
 
-        # TODO 2b: Set self.par_rate_or_spread_ to the OIS par rate in decimals.
-        # Use the floating-leg PV and the annuity from TODO 2a.
-        raise NotImplementedError("TODO 2b: calculate the OIS par rate")
+        # TODO 2b: par rate sets fixed-leg PV equal to floating-leg PV:
+        #   notional * par * annuity = float_value_  =>  par = float / (notional * annuity).
+        self.par_rate_or_spread_ = self.float_value_ / (self.notional_ * self.annuity_)
 
     def calculate_first_order_risk(
         self, gradient=None, scaler: float = 1.0, accumulate: bool = False
@@ -238,10 +238,24 @@ class ValuationEngineProductRfrSwap(ValuationEngineProduct):
         local_grad = []
         self.model_.resize_gradient(local_grad)
 
-        # TODO 2c: Accumulate the OIS par-rate gradient with respect to X^I
-        # in local_grad. Apply the quotient rule using both leg engines,
-        # keeping the fixed coupon constant and the model's component order.
-        raise NotImplementedError("TODO 2c: calculate the OIS par-rate gradient")
+        # TODO 2c: par = float_PV / (notional * annuity), with
+        # annuity = fixed_PV / (notional * fixed_rate). Holding the fixed coupon
+        # constant, the quotient rule gives
+        #   d par = (d float_PV - (par / fixed_rate) * d fixed_PV) / (notional * annuity),
+        # where d fixed_PV and d float_PV are the leg gradients w.r.t. X^I.
+        grad_fixed = []
+        grad_float = []
+        self.model_.resize_gradient(grad_fixed)
+        self.model_.resize_gradient(grad_float)
+        self.fixed_leg_engine_.calculate_first_order_risk(grad_fixed)
+        self.floating_leg_engine_.calculate_first_order_risk(grad_float)
+        self.calculate_value()
+        annuity_times_notional = self.notional_ * self.annuity_
+        par_over_fixed_rate = self.par_rate_or_spread_ / self.fixed_rate_
+        for out_block, fixed_block, float_block in zip(local_grad, grad_fixed, grad_float):
+            out_block[:] = (
+                float_block - par_over_fixed_rate * fixed_block
+            ) / annuity_times_notional
 
         return local_grad
 
